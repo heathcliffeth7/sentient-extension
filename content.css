@@ -1,0 +1,22 @@
+#sentient-logo-button {
+  position: fixed;
+  /* Sağ alt köşe için left ve top hesaplaması (düğme 50px, kenar boşluğu 25px) */
+  left: calc(100vw - 75px); /* Ekran genişliği - düğme genişliği - sağ boşluk */
+  top: calc(100vh - 75px);  /* Ekran yüksekliği - düğme yüksekliği - alt boşluk */
+  width: 50px;   /* Logo genişliği */
+  height: 50px;  /* Logo yüksekliği */
+  background-image: url('chrome-extension://__MSG_@@extension_id__/images/sentient-logo.png'); /* Logo yolu */
+  background-size: contain;
+  background-repeat: no-repeat;
+  background-position: center;
+  border: none;
+  border-radius: 50%;
+  cursor: pointer;
+  z-index: 9999999;
+  box-shadow: 0px 2px 10px rgba(0,0,0,0.2);
+  transition: transform 0.2s ease-in-out;
+}
+
+#sentient-logo-button:hover {
+  transform: scale(1.1);
+}
