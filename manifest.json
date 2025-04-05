@@ -1,11 +1,15 @@
 {
   "manifest_version": 3,
   "name": "Sentient Popup & Button",
-  "version": "1.1", 
-  "description": "Sentient Chat'i popup pencerede açar, son sohbeti hatırlar ve sayfalarda bir düğme gösterir.", 
+  "version": "1.2", // Sürümü güncelleyebiliriz
+  "description": "Sentient Chat'i popup pencerede açar, son sohbeti hatırlar, hızlı promptlar sunar ve sayfalarda bir düğme gösterir.", // Açıklamayı güncelledik
   "permissions": [
-    "tabs",      
-    "storage"    
+    "tabs",
+    "storage",
+    "contextMenus",     // YENİ / GEREKLİ
+    "scripting",        // YENİ / GEREKLİ (Panoya yazmak için)
+    "activeTab",        // YENİ / GEREKLİ (scripting için)
+    "clipboardWrite"    // YENİ / GEREKLİ (Panoya yazmak için)
   ],
   "action": {
     "default_title": "Sentient Popup'ı Aç"
@@ -13,14 +17,14 @@
   "background": {
     "service_worker": "background.js"
   },
-  "content_scripts": [ 
+  "content_scripts": [
     {
-      "matches": ["<all_urls>"], 
+      "matches": ["<all_urls>"],
       "js": ["content.js"],
-      "css": ["content.css"] 
+      "css": ["content.css"]
     }
   ],
-  "web_accessible_resources": [ 
+  "web_accessible_resources": [
     {
       "resources": ["images/sentient-logo.png"],
       "matches": ["<all_urls>"]
