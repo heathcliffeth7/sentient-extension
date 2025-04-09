@@ -1,11 +1,12 @@
+/* content.css */
 #sentient-logo-button {
   position: fixed;
-  /* Sağ alt köşe için left ve top hesaplaması (düğme 50px, kenar boşluğu 25px) */
-  left: calc(100vw - 75px); /* Ekran genişliği - düğme genişliği - sağ boşluk */
-  top: calc(100vh - 75px);  /* Ekran yüksekliği - düğme yüksekliği - alt boşluk */
-  width: 50px;   /* Logo genişliği */
-  height: 50px;  /* Logo yüksekliği */
-  background-image: url('chrome-extension://__MSG_@@extension_id__/images/sentient-logo.png'); /* Logo yolu */
+  /* Positioning for bottom-right corner (button 50px, margin 25px) */
+  left: calc(100vw - 75px); /* Screen width - button width - right margin */
+  top: calc(100vh - 75px);  /* Screen height - button height - bottom margin */
+  width: 50px;   /* Logo width */
+  height: 50px;  /* Logo height */
+  background-image: url('chrome-extension://__MSG_@@extension_id__/images/sentient-logo.png'); /* Logo path */
   background-size: contain;
   background-repeat: no-repeat;
   background-position: center;
