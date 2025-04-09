@@ -1,4 +1,4 @@
-// background.js (Added "Send Selection to New Chat" to Right-Click Menu - vFinal Full Version)
+// background.js (Added "Send to New Chat" to Context Menu - vFinal Full Version)
 
 // --- Variables ---
 let sentientPopupId = null;
@@ -13,11 +13,11 @@ chrome.runtime.onInstalled.addListener((details) => {
     setupContextMenus();
 });
 
-// --- Right-Click Menu Setup ---
+// --- Context Menu Setup ---
 // *** CHANGED: New menu item added ***
 function setupContextMenus() {
     chrome.contextMenus.removeAll(() => {
-        console.log("Previous right-click menus removed.");
+        console.log("Previous context menus removed.");
         chrome.contextMenus.create({
             id: "sentientSummarizeDirect",
             title: "Summarize with Sentient",
@@ -34,7 +34,7 @@ function setupContextMenus() {
             title: "Send Selection to New Chat", // New Title
             contexts: ["selection"] // Only when text is selected
         });
-        console.log("Right-click menus created (Summarize/Explain/New Chat w/ Selection).");
+        console.log("Context menus created (Summarize/Explain/New Chat w/ Selection).");
     });
 }
 
@@ -52,7 +52,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
     switch (message.action) {
         case "openSentientPopup": // Floating Button
-            console.log("Popup open request from floating button...");
+            console.log("Request to open popup from floating button...");
             openSentientPopup({ requestPaste: false, source: 'manual' });
             sendResponse({ status: "Popup open request processed" });
             break;
@@ -61,7 +61,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             if (!message.query) {
                 console.warn("/st command received but query is empty.");
                 sendResponse({ status: "Error: Query missing" });
-                return false;
+                return false; // No async response needed
             }
             console.log(`/st command processing. Query: "${message.query}"`);
             const queryToCopy = message.query;
@@ -69,72 +69,94 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             if (!senderTabId) {
                 console.error("Cannot process /st: Sender tab ID missing.");
                 sendResponse({ status: "Error: Missing Tab ID." });
-                return false;
+                return false; // No async response needed
             }
+            // Copy the query to clipboard first, then open popup and request paste
             copyToClipboardAndThen(queryToCopy, senderTabId, () => {
-                console.log("Clipboard set for /st, opening popup and requesting paste.");
-                openSentientPopup({ requestPaste: true, source: 'st_omni' });
+                console.log("Clipboard set for /st, requesting popup open and paste.");
+                openSentientPopup({ requestPaste: true, source: 'st_omni' }); // Treat /st like omnibox
             });
-            sendResponse({ status: "/st command request received, trying copy/open" });
-            return true; // Asynchronous
+            sendResponse({ status: "/st command request received, attempting copy/open" });
+            return true; // Indicate asynchronous response (callback will be called later)
 
-        case "pasteClipboardContentOnFocus": // /st paste after space
-             console.log("Background: Paste request received from content.js.");
+        case "pasteClipboardContentOnFocus": // Paste after /st space (or direct paste request)
+             console.log("Background: Paste request received (likely from content.js or direct call).");
             if (sentientPopupId) {
                  chrome.windows.get(sentientPopupId, { populate: true }, (existingWindow) => {
-                     if (chrome.runtime.lastError || !existingWindow) { console.warn(`Popup ID (${sentientPopupId}) not found/error.`); sentientPopupId = null; return; }
+                     if (chrome.runtime.lastError || !existingWindow) {
+                         console.warn(`Popup ID (${sentientPopupId}) not found/error during paste request.`);
+                         sentientPopupId = null; // Clear invalid ID
+                         return;
+                     }
                      const activeTab = existingWindow.tabs?.find(t => t.active);
-                     if (activeTab?.id) {
-                         console.log(`Background: Forwarding paste request to popup (${sentientPopupId}), tab (${activeTab.id}).`);
-                         chrome.tabs.sendMessage(activeTab.id, { action: "pasteClipboardContent" });
-                     } else { console.warn("Active popup tab not found."); }
+                     if (activeTab?.id && activeTab.url?.startsWith(sentientBaseUrl)) { // Ensure it's a sentient tab
+                         console.log(`Background: Forwarding paste request for popup (${sentientPopupId}), tab (${activeTab.id}).`);
+                         // Send message to sentient-paste.js in that specific tab
+                         chrome.tabs.sendMessage(activeTab.id, { action: "pasteClipboardContent" }, (response) => {
+                             if (chrome.runtime.lastError) {
+                                 console.error(`Error sending paste message to tab ${activeTab.id}: ${chrome.runtime.lastError.message}`);
+                             } else {
+                                 console.log(`Paste message sent to tab ${activeTab.id}, response:`, response?.status);
+                             }
+                             // Send response back to original caller (content.js) if needed
+                             sendResponse({ status: response?.status || (chrome.runtime.lastError ? "Error sending" : "Paste message sent") });
+                         });
+                         return true; // Indicate async response
+                     } else {
+                         console.warn("Active sentient popup tab not found or URL mismatch for pasting.");
+                         sendResponse({ status: "Paste failed: No active Sentient tab" });
+                     }
                  });
-            } else { console.log("Popup not open, /st paste after space not processed."); }
-            sendResponse({ status: "Trying to process paste request." });
-            break;
+                 return true; // Indicate async response from windows.get
+            } else {
+                console.log("Popup not open, paste request ignored.");
+                sendResponse({ status: "Paste failed: Popup closed" });
+            }
+            break; // Break for pasteClipboardContentOnFocus
 
         default:
             console.log("Unknown message action:", message.action);
             sendResponse({ status: "Unknown action" });
-            return false;
+            return false; // No async response needed
     }
-    // return false; // General case
+    // Default return false if not handled or sync response sent
+    // return false; // Let's be explicit: only return true for async cases handled above.
 });
 
 
-// Right-Click Menu Click
+// Context Menu Click
 // *** CHANGED: New case added ***
 chrome.contextMenus.onClicked.addListener((info, tab) => {
-    if (!tab || !tab.id) { console.warn("Right-click ignored: Tab ID missing."); return; }
-    console.log("Right-click menu item clicked:", info.menuItemId);
+    if (!tab || !tab.id) { console.warn("Context click ignored: Tab ID missing."); return; }
+    console.log("Context menu item clicked:", info.menuItemId);
 
     let textToCopy = "";
-    let source = 'context'; // Default source
+    let source = 'context'; // Default source (uses last chat or opens new if needed)
 
     switch (info.menuItemId) {
         case "sentientSummarizeDirect":
             if (!info.selectionText) { console.log("Selection required for Summarize."); return; }
             textToCopy = "Summarize: " + info.selectionText.trim();
-            source = 'context'; // Use current/last chat
+            source = 'context'; // Use existing/last chat
             break;
         case "sentientExplainDirect":
             if (!info.selectionText) { console.log("Selection required for Explain."); return; }
             textToCopy = "Explain: " + info.selectionText.trim();
-            source = 'context'; // Use current/last chat
+            source = 'context'; // Use existing/last chat
             break;
         case "sentientNewChatWithSelection": // New case
             if (!info.selectionText) { console.log("Selection required for New Chat."); return; }
             textToCopy = info.selectionText.trim(); // No prefix
-            source = 'context_new'; // Force new chat
+            source = 'context_new'; // Force new chat (navigate to base URL)
             break;
         default:
-            console.warn("Unknown right-click menu ID:", info.menuItemId);
+            console.warn("Unknown context menu ID:", info.menuItemId);
             return;
     }
 
     // Copy text to clipboard and then open/paste into popup
     copyToClipboardAndThen(textToCopy, tab.id, () => {
-        console.log(`Right-Click Menu (${source}): Requesting popup open/focus AND paste.`);
+        console.log(`Context Menu (${source}): Requesting popup open/focus AND paste.`);
         openSentientPopup({ requestPaste: true, source: source });
     });
 });
@@ -143,21 +165,32 @@ chrome.contextMenus.onClicked.addListener((info, tab) => {
 chrome.omnibox.onInputEntered.addListener(async (text, disposition) => {
      const query = text.trim();
      console.log(`Address bar input ('st'): "${query}"`);
-     if (!query) return;
+     if (!query) return; // Ignore empty input
 
      let currentTab = null; // Find active tab for copying
      try {
+         // Prioritize the currently active tab in the current window
          const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
-         if (tabs?.length > 0) { currentTab = tabs[0]; }
-         else { const lastFocused = await chrome.windows.getLastFocused({populate: true}); if(lastFocused?.tabs?.length > 0) { currentTab = lastFocused.tabs.find(t => t.active); } }
-     } catch (error) { console.error("Error querying active tab for address bar:", error); }
+         if (tabs?.length > 0) {
+             currentTab = tabs[0];
+         } else {
+             // Fallback: try the active tab in the last focused window (might be the omnibox window itself)
+             const lastFocused = await chrome.windows.getLastFocused({ populate: true });
+             if (lastFocused?.tabs?.length > 0) {
+                 currentTab = lastFocused.tabs.find(t => t.active);
+             }
+         }
+     } catch (error) {
+         console.error("Error querying active tab for address bar:", error);
+     }
 
-     if (!currentTab?.id) { // Continue even if copying is not possible
-         console.error("Address bar: Could not get active tab ID. Popup will open without copying.");
+     if (!currentTab?.id) { // Continue even if copying isn't possible
+         console.error("Address bar: Active tab ID couldn't be obtained. Popup will open without copying.");
          openSentientPopup({ requestPaste: false, source: 'st_omni' }); // Source st_omni but no paste
          return;
      }
 
+     // Copy the omnibox query to the clipboard using the found tab's context
      copyToClipboardAndThen(query, currentTab.id, () => {
          console.log("Address bar: Clipboard set. Requesting popup open and paste.");
          openSentientPopup({ requestPaste: true, source: 'st_omni' });
@@ -172,35 +205,41 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
     if (tab.windowId === sentientPopupId) {
 
         // 1. Save URL Changes (Still necessary to remember the last chat)
-        if (changeInfo.url && changeInfo.url !== 'chrome://newtab/' && changeInfo.url.startsWith(sentientChatUrlPattern)) {
+        // Only save actual chat URLs, ignore loading/newtab pages
+        if (changeInfo.url && changeInfo.url.startsWith(sentientChatUrlPattern)) {
             chrome.storage.local.set({ lastSentientUrl: changeInfo.url }, () => {
                 if (chrome.runtime.lastError) { console.error("Could not save last Sentient URL:", chrome.runtime.lastError); }
-                 // console.log("Last Sentient URL saved:", changeInfo.url); // Optional log
+                // console.log("Last Sentient URL saved:", changeInfo.url); // Optional log
             });
+        } else if (changeInfo.url && changeInfo.url === sentientBaseUrl) {
+             // If navigated back to the base URL, potentially clear the last chat URL?
+             // Or keep the last specific chat URL? Let's keep it for now.
+             // chrome.storage.local.remove('lastSentientUrl');
         }
 
         // 2. Check for Pending Paste Request (After New Window or Navigation)
         const isPastePendingForThisTab = pendingPasteInfo &&
                                           pendingPasteInfo.windowId === tab.windowId &&
-                                          pendingPasteInfo.tabId === tabId;
+                                          pendingPasteInfo.tabId === tabId; // Check if paste is pending for *this specific tab*
 
-        // Only when page load is complete ('complete') AND paste is expected for this tab
-        if (isPastePendingForThisTab && changeInfo.status === 'complete') {
-            console.log(`Tab ${tabId} load finished. Pending paste info found.`);
+        // Only when the page load is complete ('complete') AND paste is expected for this tab
+        if (isPastePendingForThisTab && changeInfo.status === 'complete' && tab.url?.startsWith(sentientBaseUrl)) {
+            console.log(`Tab ${tabId} load finished at ${tab.url}. Pending paste info found.`);
             const infoToSend = { ...pendingPasteInfo }; // Copy the info, because we'll clear it immediately
             pendingPasteInfo = null; // CLEAR the pending request (Don't trigger again)
 
-            // Send message after a SHORT DELAY to delegate paste operation to sentient-paste.js
+            // Send message after a SHORT DELAY to delegate the paste operation to sentient-paste.js
+            // The delay gives the page's JavaScript (like React) time to initialize the input field.
             setTimeout(() => {
-                console.log(`Delayed paste message being sent to tab ${infoToSend.tabId}.`);
+                console.log(`Sending paste message to tab ${infoToSend.tabId} with delay.`);
                 chrome.tabs.sendMessage(infoToSend.tabId, { action: "pasteClipboardContent" }, (response) => {
                     if (chrome.runtime.lastError) {
                         console.error(`ERROR sending paste message to tab ${infoToSend.tabId} (delayed):`, chrome.runtime.lastError.message);
                     } else {
-                        console.log(`Paste message sent to tab ${infoToSend.tabId} (delayed), response:`, response);
+                        console.log(`Paste message sent to tab ${infoToSend.tabId} (delayed), response:`, response?.status);
                     }
                 });
-            }, 300); // Delay 300ms
+            }, 300); // Delay 300ms (adjust if needed)
         }
     }
 });
@@ -220,7 +259,7 @@ chrome.windows.onRemoved.addListener((windowId) => {
     if (windowId === sentientPopupId) {
         console.log("Sentient popup window closed.");
         sentientPopupId = null; // Clear the ID
-        // If there's a pending paste for the closed window, clear that too
+        // If there was a pending paste for the closed window, clear it too
         if (pendingPasteInfo && pendingPasteInfo.windowId === windowId) {
             console.log("Clearing pending paste request because popup was closed.");
             pendingPasteInfo = null;
@@ -230,7 +269,7 @@ chrome.windows.onRemoved.addListener((windowId) => {
 
 // --- Helper Functions ---
 
-// Copy Text to Clipboard
+// Copy Text to Clipboard using the target tab's context
 async function copyToClipboardAndThen(text, tabId, callback) {
     if (!tabId) {
         console.error("Cannot copy: Invalid Tab ID.");
@@ -242,21 +281,28 @@ async function copyToClipboardAndThen(text, tabId, callback) {
         const results = await chrome.scripting.executeScript({
             target: { tabId: tabId },
             func: (textToCopy) => { // This function runs inside the tab
+                // Use the Clipboard API (requires secure context, usually true for extensions)
                 return navigator.clipboard.writeText(textToCopy)
                     .then(() => ({ success: true })) // If successful
-                    .catch(err => ({ success: false, error: err.message })); // If fails
+                    .catch(err => ({ success: false, error: err.message })); // If failed
             },
             args: [text] // Sent as an argument to the function to be executed
         });
-        // Check the result
-        if (!(results && results[0] && results[0].result && results[0].result.success)) {
-             const errorMsg = (results && results[0] && results[0].result && results[0].result.error) ? results[0].result.error : "Unknown error";
+        // Check the result from the executed script
+        if (results && results[0] && results[0].result && results[0].result.success) {
+             // console.log(`Text successfully copied in Tab ${tabId}.`); // Optional success log
+        } else {
+             const errorMsg = (results && results[0] && results[0].result && results[0].result.error) ? results[0].result.error : "Unknown clipboard write error";
              console.error(`Could not copy text into Tab ${tabId}: ${errorMsg}`);
         }
     } catch (err) {
-        console.error(`Error executing copy script for Tab ${tabId}:`, err);
+        // This catches errors in the executeScript call itself (e.g., tab doesn't exist, permissions issue)
+        console.error(`Error running copy script for Tab ${tabId}:`, err);
     } finally {
-        if (callback) { callback(); }
+        // Ensure the callback is always called, regardless of success or failure
+        if (callback) {
+            callback();
+        }
     }
 }
 
@@ -265,140 +311,130 @@ async function copyToClipboardAndThen(text, tabId, callback) {
 function openSentientPopup({ requestPaste = false, source = 'manual' }) {
     console.log(`openSentientPopup called. Source: ${source}, Paste Request: ${requestPaste}`);
 
-    if (!requestPaste && pendingPasteInfo) { console.log("Clearing previous pending paste."); pendingPasteInfo = null; }
+    // If the new action doesn't request a paste, clear any old pending paste request.
+    if (!requestPaste && pendingPasteInfo) {
+         console.log("Clearing previous pending paste as new action doesn't require it.");
+         pendingPasteInfo = null;
+    }
 
-    // 1. Does an Existing Popup Window Exist?
+    // 1. Is There an Existing Popup Window?
     if (sentientPopupId) {
         chrome.windows.get(sentientPopupId, { populate: true }, (existingWindow) => {
             if (chrome.runtime.lastError || !existingWindow) {
+                // The stored ID is invalid (window closed unexpectedly?)
                 console.warn(`Existing popup ID (${sentientPopupId}) not found/error. Resetting ID and retrying.`);
-                sentientPopupId = null; pendingPasteInfo = null;
-                openSentientPopup({ requestPaste, source }); // Call again
+                sentientPopupId = null;
+                pendingPasteInfo = null; // Clear potentially related pending paste
+                openSentientPopup({ requestPaste, source }); // Call again to create a new one
                 return;
             }
 
-            // Window found, focus
-            chrome.windows.update(sentientPopupId, { focused: true, state: "normal" }, () => {
+            // Window found, focus it and ensure it's in a usable state
+            chrome.windows.update(sentientPopupId, { focused: true, state: "normal" }, (updatedWindow) => {
                  if (chrome.runtime.lastError) {
-                    console.warn(`Could not focus/update existing popup ID (${sentientPopupId}). Resetting ID and retrying.`);
-                    sentientPopupId = null; pendingPasteInfo = null;
-                    openSentientPopup({ requestPaste, source }); return;
+                    // Focusing might fail in some scenarios (e.g., OS interference)
+                    console.warn(`Could not focus/update existing popup ID (${sentientPopupId}): ${chrome.runtime.lastError.message}. Resetting ID and retrying.`);
+                    sentientPopupId = null;
+                    pendingPasteInfo = null;
+                    openSentientPopup({ requestPaste, source }); // Call again
+                    return;
                  }
 
                 console.log(`Existing popup (${sentientPopupId}) focused.`);
-                const activeTab = existingWindow.tabs?.find(t => t.active);
+                const activeTab = updatedWindow.tabs?.find(t => t.active); // Use updatedWindow from callback
 
                 if (activeTab?.id) {
-                    // Is Navigation Needed? (If Manual OR 'context_new' AND not at base URL)
-                    const shouldNavigate = (source === 'manual' || source === 'context_new') && (activeTab.url !== sentientBaseUrl);
+                    // Determine if navigation to the base URL is needed
+                    // Navigate if:
+                    // - Source is 'manual' and tab is not already at base URL.
+                    // - Source is 'context_new' (always force navigation to base URL).
+                    const needsNavToBase = (source === 'manual' && activeTab.url !== sentientBaseUrl) || source === 'context_new';
 
-                    // Clear previous pending paste
-                    if (pendingPasteInfo && pendingPasteInfo.windowId === existingWindow.id) {
+                    // Clear any pending paste for this window *before* deciding the next action
+                    if (pendingPasteInfo && pendingPasteInfo.windowId === updatedWindow.id) {
                          console.log("Clearing pending paste for existing window before new action.");
                          pendingPasteInfo = null;
                     }
 
-                    if (shouldNavigate) {
+                    if (needsNavToBase) {
                         console.log(`Navigation needed (Source: ${source}). Tab ${activeTab.id} to: ${sentientBaseUrl}.`);
-                        chrome.tabs.update(activeTab.id, { url: sentientBaseUrl }, (updatedTab) => {
-                            if (chrome.runtime.lastError) { console.error("Error redirecting existing tab:", chrome.runtime.lastError); return; }
-                            // If paste is also requested (i.e., source == 'context_new'), set pendingPasteInfo for after navigation
-                            if (requestPaste) { // Only context_new will enter this block
-                                console.log(`Navigation started (${source}). Setting pending paste.`);
-                                pendingPasteInfo = { windowId: existingWindow.id, tabId: activeTab.id };
+                        chrome.tabs.update(activeTab.id, { url: sentientBaseUrl, active: true }, (navigatedTab) => {
+                            if (chrome.runtime.lastError) {
+                                console.error("Error navigating existing tab:", chrome.runtime.lastError);
+                                // Don't set pending paste if navigation failed
+                                return;
+                            }
+                            // If paste is requested after navigation (only for 'context_new'), set pendingPasteInfo
+                            if (requestPaste && navigatedTab) { // Should always be true for context_new
+                                console.log(`Navigation started (${source}). Setting pending paste for tab ${navigatedTab.id}.`);
+                                pendingPasteInfo = { windowId: updatedWindow.id, tabId: navigatedTab.id };
                             }
                         });
-                    } else { // Navigation Not Needed (st_omni, context, or manual/context_new but already at base)
-                        if (requestPaste) { // st_omni, context (or context_new but already at base)
-                             console.log(`Navigation not needed. Injecting paste script directly into tab ${activeTab.id}.`);
-                            injectPasteScript(activeTab.id); // Paste directly
-                        } else { // manual (and already at base URL)
+                    } else { // Navigation Not Needed
+                        // If paste is requested, and we are *not* navigating, paste directly.
+                        // This applies to:
+                        // - 'st_omni'
+                        // - 'context' (summarize/explain)
+                        // - 'manual' or 'context_new' IF already at base URL
+                        if (requestPaste) {
+                             console.log(`Navigation not needed. Requesting paste directly in tab ${activeTab.id}.`);
+                             // Send message directly to sentient-paste.js (instead of injecting)
+                             chrome.tabs.sendMessage(activeTab.id, { action: "pasteClipboardContent" }, (response) => {
+                                if (chrome.runtime.lastError) { console.error(`Error sending direct paste message to tab ${activeTab.id}: ${chrome.runtime.lastError.message}`); }
+                                else { console.log(`Direct paste message sent to tab ${activeTab.id}, response:`, response?.status); }
+                            });
+                        } else { // No navigation, no paste requested ('manual' at base URL)
                             console.log("Navigation not needed and paste not requested.");
                         }
                     }
-                } else if (requestPaste) { console.warn("Paste requested but active tab not found."); }
-            }); // end of windows.update callback
-        }); // end of windows.get callback
-        return; // Existing window processed
+                } else if (requestPaste) {
+                    // Should not happen if window update succeeded, but handle defensively
+                    console.warn("Paste requested but active tab not found in existing focused window.");
+                }
+            }); // end windows.update callback
+        }); // end windows.get callback
+        return; // Handled existing window
     }
 
     // 2. Create New Popup Window
     console.log("No existing popup. Creating new window.");
     chrome.storage.local.get(['lastPopupState'], (result) => {
-        const urlToOpen = sentientBaseUrl; // If popup is closed, ALWAYS open the base URL
-        console.log(`New popup: URL: ${urlToOpen}, Source: ${source}, Paste: ${requestPaste}`);
+        // New popups always open the base URL, regardless of source.
+        // The 'source' primarily dictates whether a paste is queued *after* creation.
+        const urlToOpen = sentientBaseUrl;
+        console.log(`New popup: URL: ${urlToOpen}, Source: ${source}, Paste Requested: ${requestPaste}`);
         const stateToUse = result.lastPopupState || defaultPopupState;
+
         chrome.windows.create({
-             url: urlToOpen, type: "popup",
-             width: stateToUse.width, height: stateToUse.height,
-             top: stateToUse.top, left: stateToUse.left
+             url: urlToOpen,
+             type: "popup",
+             width: stateToUse.width,
+             height: stateToUse.height,
+             top: stateToUse.top,
+             left: stateToUse.left
          }, (window) => {
-            if (window) {
-                sentientPopupId = window.id; console.log(`New popup created, ID: ${sentientPopupId}`);
-                if (requestPaste) { // st_omni or context or context_new
-                    const newTabId = window.tabs?.[0]?.id;
-                    if (newTabId) { pendingPasteInfo = { windowId: window.id, tabId: newTabId }; }
-                    else { pendingPasteInfo = { windowId: window.id, tabId: null }; } // onUpdated will catch it
+            if (window?.id && window.tabs?.[0]?.id) {
+                sentientPopupId = window.id;
+                const newTabId = window.tabs[0].id;
+                console.log(`New popup created, ID: ${sentientPopupId}, Tab ID: ${newTabId}`);
+                // If paste is requested for the new window, set pending info
+                if (requestPaste) { // Applies to st_omni, context, context_new
+                    pendingPasteInfo = { windowId: window.id, tabId: newTabId };
                     console.log(`Pending paste set for new window:`, pendingPasteInfo);
+                    // The onUpdated listener will handle the actual paste message after the tab loads.
                 }
             } else {
-                 console.error("Could not create popup window.", chrome.runtime.lastError?.message);
-                 sentientPopupId = null; pendingPasteInfo = null;
+                 console.error("Could not create popup window or get tab ID.", chrome.runtime.lastError?.message);
+                 sentientPopupId = null; // Ensure ID is null if creation failed
+                 pendingPasteInfo = null;
             }
         });
     });
-} // end of openSentientPopup
+} // end openSentientPopup
 
 
-// Inject Paste Script into Target Tab
-function injectPasteScript(tabId) {
-    if (!tabId) { console.error("injectPasteScript: Invalid tabId."); return; }
-    console.log(`Injecting paste script into tab ${tabId}...`);
-    try {
-        chrome.scripting.executeScript({
-            target: { tabId: tabId },
-            func: async () => { // This function runs inside the tab
-                console.log("Injected Script: Executing...");
-                let textToPaste = "";
-                try { textToPaste = await navigator.clipboard.readText(); if (!textToPaste) { console.log("Injected Script: Clipboard empty."); return { success: false, reason: "Clipboard empty" }; } console.log("Injected Script: Read from clipboard."); }
-                catch (error) { console.error("Injected Script: Clipboard read error:", error); return { success: false, reason: "Clipboard read error", message: error.message }; }
-
-                const inputSelector = 'textarea[data-testid="query#input"], textarea[data-testid="chat.query#input"]';
-                console.log("Injected Script: Selector to use:", inputSelector); // Log the selector
-
-                let targetInput = null;
-                let retries = 10; const retryDelay = 300;
-
-                while (!targetInput && retries > 0) {
-                    targetInput = document.querySelector(inputSelector); // Updated selector is used
-                    if (targetInput) break;
-                    retries--;
-                    if (retries > 0) await new Promise(resolve => setTimeout(resolve, retryDelay));
-                }
-
-                if (targetInput) {
-                    console.log("Injected Script: Target input found.");
-                    try {
-                        targetInput.focus(); targetInput.value = textToPaste;
-                        targetInput.dispatchEvent(new Event('input', { bubbles: true, cancelable: true }));
-                        targetInput.dispatchEvent(new Event('change', { bubbles: true, cancelable: true }));
-                        targetInput.dispatchEvent(new Event('blur', { bubbles: true, cancelable: true }));
-                        if (targetInput.setSelectionRange) { targetInput.setSelectionRange(targetInput.value.length, targetInput.value.length); }
-                        console.log("Injected Script: Paste and event triggering successful.");
-                        return { success: true };
-                    } catch (pasteError) { console.error("Injected Script: Error during paste/event triggering:", pasteError); return { success: false, reason: "Paste execution error", message: pasteError.message }; }
-                } else {
-                    console.error(`Injected Script: Target input ('${inputSelector}') not found after retries.`);
-                    return { success: false, reason: "Input not found" };
-                }
-            } // end of func
-        }).then((results) => {
-             // console.log(`Script injection result for tab ${tabId}:`, results);
-             if (chrome.runtime.lastError) { console.error(`Error after executeScript for tab ${tabId}:`, chrome.runtime.lastError.message); }
-             else if (results?.[0]?.result?.success === false) { console.warn(`Injected script failed in tab ${tabId}. Reason: ${results[0].result.reason} ${results[0].result.message || ''}`); }
-        }).catch(err => { console.error(`executeScript Promise error for tab ${tabId}:`, err); });
-    } catch (injectionError) { console.error(`Synchronous error calling executeScript for tab ${tabId}:`, injectionError); }
-}
-// END of injectPasteScript
+// Note: The injectPasteScript function was removed as direct messaging
+// to the persistent sentient-paste.js content script is now preferred
+// over injecting temporary scripts.
 
 // End of file (EOF)
