@@ -29,14 +29,14 @@
       "exclude_matches": ["https://chat.sentient.xyz/*"] // Don't run on the chat page
     },
     {
-      "matches": ["https://chat.sentient.xyz/*"], // Only for pasting on the chat page
+      "matches": ["https://chat.sentient.xyz/*"], // For pasting only on the chat page
       "js": ["sentient-paste.js"],
       "run_at": "document_idle"
     }
   ],
   "web_accessible_resources": [
     {
-      "resources": ["images/sentient-logo.png"], // For the floating button's logo
+      "resources": ["images/sentient-logo.png"], // For the floating button logo
       "matches": ["<all_urls>"]
     }
   ],
