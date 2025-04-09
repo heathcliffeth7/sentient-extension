@@ -1,27 +1,27 @@
-// sentient-paste.js (Corrected Selector - Pastes via Message Only - vFinal)
+// sentient-paste.js (Fixed Selector - Only Pastes via Message - Final Version)
 // ONLY works on chat.sentient.xyz
 
 (function() {
-    console.log("Sentient Paste script loaded (vCorrected Selector - Pastes via Message Only).");
+    console.log("Sentient Paste script loaded (vFixed Selector - Only Pastes via Message).");
 
-    // *** CHANGED: Selector updated ***
+    // *** MODIFIED: Selector updated ***
     const INPUT_SELECTOR = 'textarea[data-testid="query#input"], textarea[data-testid="chat.query#input"]';
-    console.log("Input selector to use:", INPUT_SELECTOR); // Log the selector
+    console.log("Input selector to use:", INPUT_SELECTOR); // Log selector
 
-    // Helper function for visual feedback (Optional)
+    // Visual feedback helper function (Optional)
     function visualFeedback(element, success) {
         if (!element) return;
         const originalBorder = element.style.border;
         element.style.border = success ? "2px solid lightgreen" : "2px solid red";
-        console.log(`Sentient Paste: Visual feedback ${success ? 'successful (green)' : 'failed (red)'}.`);
+        console.log(`Sentient Paste: Visual feedback ${success ? 'success (green)' : 'failed (red)'}.`);
         setTimeout(() => {
             try { element.style.border = originalBorder; } catch(e) { /* ignore */ }
         }, 1000);
     }
 
-    // Asynchronous function that reads text from the clipboard and pastes it into the relevant input
+    // Async function to read clipboard and paste to target input
     async function pasteFromClipboard() {
-        console.log("Sentient Paste: 'pasteFromClipboard' function triggered by message started.");
+        console.log("Sentient Paste: Message-triggered 'pasteFromClipboard' function started.");
         let textToPaste = "";
         let targetInput = null;
 
@@ -37,11 +37,11 @@
             return { success: false, reason: "Clipboard read error", message: error.message };
         }
 
-        // Find the input field (Retry and delay logic)
+        // Find input field (with retry and delay logic)
         let retries = 10;
         const retryDelay = 300;
         while (!targetInput && retries > 0) {
-            targetInput = document.querySelector(INPUT_SELECTOR); // Updated selector is used
+            targetInput = document.querySelector(INPUT_SELECTOR); // Using updated selector
             if (targetInput) break;
             console.log(`Sentient Paste: Target input ('${INPUT_SELECTOR}') not found, retrying (${retries} left)...`);
             retries--;
@@ -49,13 +49,13 @@
         }
 
         if (!targetInput) {
-            // *** Error message will now show the current selector ***
+            // *** Error message now shows current selector ***
             console.error(`Sentient Paste: Target input field ('${INPUT_SELECTOR}') not found.`);
              visualFeedback(targetInput, false);
             return { success: false, reason: "Input not found" };
         }
 
-        // If input is found, continue...
+        // If input found, continue...
         console.log("Sentient Paste: Input field found:", targetInput);
         let pasteAttemptSuccess = false;
         try {
@@ -68,7 +68,7 @@
             } else if (targetInput.isContentEditable) {
                 targetInput.textContent = textToPaste;
             }
-             console.log("Sentient Paste: Value/textContent assigned.");
+             console.log("Sentient Paste: Value/textContent set.");
 
             targetInput.dispatchEvent(new Event('input', { bubbles: true, cancelable: true }));
             console.log("Sentient Paste: Input event triggered.");
@@ -96,7 +96,7 @@
         return { success: pasteAttemptSuccess };
     }
 
-    // Only listen for messages from background.js
+    // Only listen to messages from background.js
     chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         console.log("Sentient Paste: Message received:", message);
         if (message.action === "pasteClipboardContent") {
@@ -115,4 +115,4 @@
         }
     });
     console.log("Sentient Paste: Message listener active.");
-})(); // End of IIFE
+})(); // IIFE End
