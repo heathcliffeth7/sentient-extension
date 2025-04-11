@@ -1,50 +1,55 @@
 {
   "manifest_version": 3,
-  "name": "Sentient Popup & Button (AutoPaste)",
-  "version": "1.7", // Version updated
-  "description": "Opens Sentient Chat, auto-pastes on command, shows button, supports /st & omnibox.",
+  "name": "Sentient is Everywhere",
+  "version": "1.0.1",
+  "description": "Universal paste functionality for various platforms",
   "permissions": [
-    "tabs",
-    "storage",
     "contextMenus",
-    "scripting",
-    "activeTab",
+    "storage",
+    "clipboardRead",
     "clipboardWrite",
-    "clipboardRead"
+    "tabs",
+    "activeTab",
+    "scripting"
   ],
   "host_permissions": [
-    "<all_urls>"  // <-- Required for /st and floating button
+    "<all_urls>"
   ],
-  "action": {
-    "default_title": "Open/Focus Sentient Popup"
-  },
   "background": {
     "service_worker": "background.js"
   },
+  "action": {
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
   "content_scripts": [
     {
-      "matches": ["<all_urls>"], // For floating button and /st listener
+      "matches": ["<all_urls>"],
       "js": ["content.js"],
       "css": ["content.css"],
-      "exclude_matches": ["https://chat.sentient.xyz/*"] // Don't run on chat page
+      "run_at": "document_end"
     },
     {
-      "matches": ["https://chat.sentient.xyz/*"], // Only for paste on chat page
+      "matches": ["<all_urls>"],
       "js": ["sentient-paste.js"],
       "run_at": "document_idle"
     }
   ],
   "web_accessible_resources": [
     {
-      "resources": ["images/sentient-logo.png"], // For floating button logo
+      "resources": ["images/*"],
       "matches": ["<all_urls>"]
     }
   ],
-  "icons": {
-    "16": "icons/icon16.png",
-    "48": "icons/icon48.png",
-    "128": "icons/icon128.png"
-  },
+  "options_page": "options.html",
   "omnibox": {
     "keyword": "st"
   }
