@@ -1,4 +1,4 @@
-// background.js (Right-click menu "Send to New Chat" added - Final Version)
+// background.js (Right-click menu "Send to New Chat" added + Send Sentient Button)
 
 // --- Variables ---
 let sentientPopupId = null;
@@ -6,36 +6,333 @@ const sentientBaseUrl = "https://chat.sentient.xyz/";
 const sentientChatUrlPattern = "https://chat.sentient.xyz/c/";
 const defaultPopupState = { width: 450, height: 700, top: 10, left: 10 };
 let pendingPasteInfo = null; // { windowId: number, tabId: number | null }
+let menuCounter = 0; // Global counter to ensure unique IDs even when called in quick succession
+let activeMenuItems = []; // Track active menu items
+
+// Force create context menu on startup
+chrome.runtime.onStartup.addListener(() => {
+    console.log("Extension starting up, creating context menus...");
+    // Force reset any stuck flags
+    resetContextMenuFlag();
+    // Load settings and setup context menus
+    chrome.storage.sync.get({
+        showContextMenu: true,
+        showSummarize: true,
+        showExplain: true,
+        showNewChat: true,
+        showSendSentient: true,
+        customCommands: [],
+        selectedLanguage: ''
+    }, function(items) {
+        console.log("Startup settings loaded:", items);
+        if (items.showContextMenu) {
+            // Force create menus with a small delay to ensure browser is ready
+            setTimeout(() => {
+                forceCreateContextMenus();
+            }, 1000);
+        }
+    });
+});
+
+// Function to force create context menus regardless of flag state
+function forceCreateContextMenus() {
+    console.log("Force creating context menus...");
+    // Reset flag first
+    resetContextMenuFlag();
+    // Then create menus
+    setupContextMenus();
+}
 
 // --- Setup/Update ---
 chrome.runtime.onInstalled.addListener((details) => {
     console.log(`Extension ${details.reason}.`);
-    setupContextMenus();
+    
+    // Force reset any stuck flags
+    resetContextMenuFlag();
+    
+    // Load settings and setup context menus
+    chrome.storage.sync.get({
+        showContextMenu: true,
+        showSummarize: true,
+        showExplain: true,
+        showNewChat: true,
+        showSendSentient: true,
+        customCommands: [],
+        selectedLanguage: ''
+    }, function(items) {
+        console.log("Initial settings loaded:", items);
+        if (items.showContextMenu) {
+            // Force create menus with a small delay to ensure browser is ready
+            setTimeout(() => {
+                forceCreateContextMenus();
+            }, 1000);
+        }
+    });
 });
 
-// --- Right-click Menu Setup ---
-// *** MODIFIED: New menu item added ***
-function setupContextMenus() {
+// Listen for storage changes to update context menus when settings change
+chrome.storage.onChanged.addListener((changes, namespace) => {
+    if (namespace === 'sync') {
+        console.log("Storage changes detected:", changes);
+        
+        // Get all current settings to make a decision
+        chrome.storage.sync.get({
+            showContextMenu: true,
+            showSummarize: true,
+            showExplain: true,
+            showNewChat: true,
+            showSendSentient: true,
+            customCommands: [],
+            selectedLanguage: ''
+        }, function(items) {
+            console.log("Current settings:", items);
+            
+            // If context menu setting changed
+            if (changes.showContextMenu) {
+                console.log("Context menu setting changed:", changes.showContextMenu.newValue);
+                
+                if (changes.showContextMenu.newValue) {
+                    // If enabled, setup context menus
+                    setupContextMenus();
+                } else {
+                    // If disabled, remove all context menus
+                    removeAllContextMenus(() => {
+                        console.log("Context menus removed due to setting change.");
+                    });
+                }
+            } 
+            // If any feature setting changed or custom commands changed or language changed
+            else if (changes.showSummarize || changes.showExplain || changes.showNewChat || 
+                     changes.showSendSentient || changes.customCommands || changes.selectedLanguage) {
+                
+                console.log("Feature settings, custom commands, or language changed");
+                
+                // Only update if context menu is enabled
+                if (items.showContextMenu) {
+                    setupContextMenus();
+                }
+            }
+        });
+    }
+});
+
+// --- Improved Context Menu Management ---
+
+// Global flag to prevent multiple simultaneous context menu operations
+let isUpdatingContextMenus = false;
+
+// Safety timeout to reset the flag if it gets stuck
+function resetContextMenuFlag() {
+    console.log("Force resetting isUpdatingContextMenus flag");
+    isUpdatingContextMenus = false;
+}
+
+// Function to safely remove all context menus with verification
+function removeAllContextMenus(callback) {
+    // If already updating, queue the operation
+    if (isUpdatingContextMenus) {
+        console.log("Context menu update already in progress, queueing this operation");
+        setTimeout(() => removeAllContextMenus(callback), 500);
+        return;
+    }
+    
+    // Set flag to prevent concurrent operations
+    isUpdatingContextMenus = true;
+    
+    // Clear our tracking array first
+    activeMenuItems = [];
+    
+    // Then remove all context menus
     chrome.contextMenus.removeAll(() => {
-        console.log("Previous right-click menus removed.");
-        chrome.contextMenus.create({
-            id: "sentientSummarizeDirect",
-            title: "Summarize with Sentient",
-            contexts: ["selection"]
-        });
-        chrome.contextMenus.create({
-            id: "sentientExplainDirect",
-            title: "Explain with Sentient",
-            contexts: ["selection"]
-        });
-        // New Menu Item
-        chrome.contextMenus.create({
-            id: "sentientNewChatWithSelection", // New ID
-            title: "Send Selection to New Chat", // New Title
-            contexts: ["selection"] // Only when text is selected
-        });
-        console.log("Right-click menus created (Summarize/Explain/New Chat w/ Selection).");
+        console.log("All context menus removed successfully");
+        
+        // Verify removal by trying to get all context menus (only works in Chrome MV3)
+        try {
+            chrome.contextMenus.getAll((menuItems) => {
+                if (menuItems && menuItems.length > 0) {
+                    console.warn(`${menuItems.length} menu items still exist after removeAll. Retrying...`);
+                    // If items still exist, try again after a longer delay
+                    setTimeout(() => {
+                        chrome.contextMenus.removeAll(() => {
+                            console.log("Second attempt to remove all context menus completed");
+                            isUpdatingContextMenus = false;
+                            if (callback) callback();
+                        });
+                    }, 500);
+                } else {
+                    console.log("Verified all context menus are removed");
+                    isUpdatingContextMenus = false;
+                    if (callback) callback();
+                }
+            });
+        } catch (error) {
+            // If getAll is not supported, just assume it worked
+            console.log("Could not verify menu removal, assuming success");
+            isUpdatingContextMenus = false;
+            if (callback) callback();
+        }
     });
+}
+
+// --- Right-click Menu Setup ---
+// *** FIXED: Completely redesigned to prevent duplicate ID errors and ensure reliable menu management ***
+function setupContextMenus() {
+    console.log("Setting up context menus...");
+    
+    // Force reset the flag if it's been set for more than 10 seconds
+    // This prevents the flag from getting permanently stuck
+    if (isUpdatingContextMenus) {
+        console.log("Context menu update flag is already set, checking if it's stuck...");
+        resetContextMenuFlag();
+    }
+    
+    // Set flag to prevent concurrent operations
+    isUpdatingContextMenus = true;
+    
+    // Set a safety timeout to reset the flag after 10 seconds no matter what
+    const safetyTimeout = setTimeout(() => {
+        console.log("Safety timeout triggered - resetting context menu flag");
+        isUpdatingContextMenus = false;
+    }, 10000);
+    
+    try {
+        // First remove all existing context menus to prevent duplicates
+        chrome.contextMenus.removeAll(() => {
+            console.log("Previous right-click menus removed, creating new menus...");
+            
+            // Get all settings to determine which menu items to create
+            chrome.storage.sync.get({
+                showContextMenu: true,
+                showSummarize: true,
+                showExplain: true,
+                showNewChat: true,
+                showSendSentient: true,
+                customCommands: [],
+                selectedLanguage: ''
+            }, function(items) {
+                console.log("Creating menus with settings:", items);
+                
+                // If context menu is disabled, don't create any menus
+                if (!items.showContextMenu) {
+                    console.log("Context menu is disabled, not creating any menus");
+                    clearTimeout(safetyTimeout);
+                    isUpdatingContextMenus = false;
+                    return;
+                }
+                
+                // Create a queue of menu items to create
+                const menuItemsToCreate = [];
+                
+                // Add standard menu items based on settings with consistent IDs
+                if (items.showSummarize) {
+                    menuItemsToCreate.push({
+                        id: 'sum',
+                        title: "Summarize with AI",
+                        contexts: ["selection"]
+                    });
+                }
+                
+                if (items.showExplain) {
+                    menuItemsToCreate.push({
+                        id: 'exp',
+                        title: "Explain with AI",
+                        contexts: ["selection"]
+                    });
+                }
+                
+                if (items.showNewChat) {
+                    menuItemsToCreate.push({
+                        id: 'newchat',
+                        title: "Send Selection to New Chat",
+                        contexts: ["selection"]
+                    });
+                }
+                
+                if (items.showSendSentient) {
+                    menuItemsToCreate.push({
+                        id: 'send',
+                        title: "Send Text",
+                        contexts: ["selection"]
+                    });
+                }
+                
+                // Add custom command menu items with consistent IDs
+                if (items.customCommands && items.customCommands.length > 0) {
+                    items.customCommands.forEach((command, index) => {
+                        menuItemsToCreate.push({
+                            id: `custom_${index}`,
+                            title: command,
+                            contexts: ["selection"]
+                        });
+                    });
+                }
+                
+                // Add translation option if language is selected
+                if (items.selectedLanguage) {
+                    let translationTitle = "";
+                    if (items.selectedLanguage === "Turkish") {
+                        translationTitle = "Türkçeye çevir";
+                    } else {
+                        translationTitle = `Translate to ${items.selectedLanguage}`;
+                    }
+                    
+                    menuItemsToCreate.push({
+                        id: 'translate',
+                        title: translationTitle,
+                        contexts: ["selection"]
+                    });
+                }
+                
+                console.log(`Creating ${menuItemsToCreate.length} menu items`);
+                
+                // If no menu items to create, we're done
+                if (menuItemsToCreate.length === 0) {
+                    console.log("No menu items to create");
+                    clearTimeout(safetyTimeout);
+                    isUpdatingContextMenus = false;
+                    return;
+                }
+                
+                let createdCount = 0;
+                const totalCount = menuItemsToCreate.length;
+                
+                // Create all menu items immediately
+                for (const menuItem of menuItemsToCreate) {
+                    try {
+                        chrome.contextMenus.create(menuItem, () => {
+                            if (chrome.runtime.lastError) {
+                                console.error(`Error creating menu item ${menuItem.title}:`, chrome.runtime.lastError);
+                            } else {
+                                console.log(`Created menu item: ${menuItem.title} with ID: ${menuItem.id}`);
+                                // Track successfully created menu items
+                                activeMenuItems.push(menuItem.id);
+                            }
+                            
+                            // Count created items and reset flag when all are done
+                            createdCount++;
+                            if (createdCount >= totalCount) {
+                                console.log("All menu items created, resetting flag");
+                                clearTimeout(safetyTimeout);
+                                isUpdatingContextMenus = false;
+                            }
+                        });
+                    } catch (error) {
+                        console.error(`Exception creating menu item ${menuItem.title}:`, error);
+                        createdCount++;
+                        if (createdCount >= totalCount) {
+                            console.log("All menu items processed (with some errors), resetting flag");
+                            clearTimeout(safetyTimeout);
+                            isUpdatingContextMenus = false;
+                        }
+                    }
+                }
+            });
+        });
+    } catch (error) {
+        console.error("Error in setupContextMenus:", error);
+        clearTimeout(safetyTimeout);
+        isUpdatingContextMenus = false;
+    }
 }
 
 // --- Event Listeners ---
@@ -44,6 +341,101 @@ function setupContextMenus() {
 chrome.action.onClicked.addListener((tab) => {
     console.log("Extension icon clicked.");
     openSentientPopup({ requestPaste: false, source: 'manual' });
+});
+
+// Context Menu Click Handler
+chrome.contextMenus.onClicked.addListener((info, tab) => {
+    const menuId = info.menuItemId;
+    const selectedText = info.selectionText;
+    
+    console.log(`Context menu clicked: ${menuId}`);
+    
+    // Handle based on menu ID prefix
+    if (menuId.startsWith('sum_')) {
+        console.log("Summarize option clicked");
+        // Handle summarize action
+    } else if (menuId.startsWith('exp_')) {
+        console.log("Explain option clicked");
+        // Handle explain action
+    } else if (menuId.startsWith('newchat_')) {
+        console.log("New chat option clicked");
+        // Handle new chat action
+    } else if (menuId.startsWith('send_')) {
+        console.log("Send text option clicked");
+        // Handle send text action
+    } else if (menuId.startsWith('custom_')) {
+        console.log("Custom command clicked");
+        // Handle custom command
+    } else if (menuId.startsWith('translate_')) {
+        console.log("Translate option clicked");
+        // Handle translation
+    }
+});
+
+// Add clipboard access handler for content scripts
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+    console.log("Background: Message received:", message.action);
+    
+    if (message.action === "getClipboardContent") {
+        console.log("Background: Received clipboard content request from tab", sender.tab?.id);
+        
+        // Use a more reliable method to read clipboard
+        try {
+            // Background scripts cannot access document or DOM directly
+            // Only try navigator.clipboard API which is available in background context
+            if (navigator.clipboard && navigator.clipboard.readText) {
+                console.log("Background: Trying navigator.clipboard API");
+                
+                // Set a timeout to ensure we don't hang indefinitely
+                const timeoutId = setTimeout(() => {
+                    console.warn("Background: Clipboard read timeout");
+                    sendResponse({ 
+                        success: false, 
+                        error: "Clipboard read timeout", 
+                        fallbackNeeded: true 
+                    });
+                }, 2000);
+                
+                navigator.clipboard.readText()
+                    .then(text => {
+                        clearTimeout(timeoutId);
+                        console.log("Background: Successfully read clipboard content via API");
+                        sendResponse({ success: true, text: text });
+                    })
+                    .catch(error => {
+                        clearTimeout(timeoutId);
+                        console.error("Background: Error reading clipboard via API:", error);
+                        // Inform content script to use its own fallback mechanisms
+                        sendResponse({ 
+                            success: false, 
+                            error: "Clipboard API error: " + error.message,
+                            fallbackNeeded: true
+                        });
+                    });
+            } else {
+                console.warn("Background: Clipboard API not available");
+                // Inform content script to use its own fallback mechanisms
+                sendResponse({ 
+                    success: false, 
+                    error: "Clipboard API not available in background context",
+                    fallbackNeeded: true
+                });
+            }
+            
+            return true; // Indicates async response
+        } catch (error) {
+            console.error("Background: Exception in clipboard handler:", error);
+            // Inform content script to use its own fallback mechanisms
+            sendResponse({ 
+                success: false, 
+                error: error.message,
+                fallbackNeeded: true
+            });
+            return true;
+        }
+    }
+    
+    return false; // Not handled
 });
 
 // Messages from Content Scripts
@@ -72,10 +464,112 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
                 return false;
             }
             copyToClipboardAndThen(queryToCopy, senderTabId, () => {
-                console.log("Clipboard set for /st, opening popup and requesting paste.");
-                openSentientPopup({ requestPaste: true, source: 'st_omni' });
+                console.log("Clipboard set for /st, checking popup status.");
+                // Check if popup is already open
+                if (sentientPopupId) {
+                    console.log("Popup is already open, using existing chat.");
+                    // Popup is open, paste into existing popup
+                    openSentientPopup({ requestPaste: true, source: 'context' });
+                } else {
+                    console.log("Popup is not open, creating new chat.");
+                    // Popup is not open, open new chat
+                    openSentientPopup({ requestPaste: true, source: 'context_new' });
+                }
             });
             sendResponse({ status: "/st command request received, trying copy/open" });
+            return true; // Asynchronous
+
+        case "processSelectionAction": // New case for selection menu actions
+            if (!message.text) {
+                console.warn("Selection action received but text is empty.");
+                sendResponse({ status: "Error: Text missing" });
+                return false;
+            }
+            console.log(`Processing selection action. Type: "${message.type}", Text length: ${message.text.length}`);
+            const senderTabId2 = sender.tab ? sender.tab.id : null;
+            if (!senderTabId2) {
+                console.error("Cannot process selection action: Missing sender tab ID.");
+                sendResponse({ status: "Error: Missing Tab ID." });
+                return false;
+            }
+            
+            let textToSend = message.text;
+            let source = 'context'; // Default source
+            
+            // Format text based on action type
+            switch (message.type) {
+                case "summarize":
+                    textToSend = `"${message.text.trim()}",Summarize`;
+                    // Check if popup is already open
+                    if (sentientPopupId) {
+                        source = 'context'; // Use current chat if popup is open
+                    } else {
+                        source = 'context_new'; // Open new chat if popup is not open
+                    }
+                    break;
+                case "explain":
+                    textToSend = `"${message.text.trim()}",Explain`;
+                    // Check if popup is already open
+                    if (sentientPopupId) {
+                        source = 'context'; // Use current chat if popup is open
+                    } else {
+                        source = 'context_new'; // Open new chat if popup is not open
+                    }
+                    break;
+                case "newchat":
+                    textToSend = message.text.trim(); // No prefix
+                    source = 'context_new'; // Force new chat
+                    break;
+                case "sendsentient":
+                    textToSend = message.text.trim(); // No prefix
+                    // Check if popup is already open
+                    if (sentientPopupId) {
+                        source = 'context'; // Use current chat if popup is open
+                    } else {
+                        source = 'context_new'; // Open new chat if popup is not open
+                    }
+                    break;
+                case "custom":
+                    // Format text as "selected text", [custom command]
+                    textToSend = `"${message.text.trim()}",${message.command}`;
+                    // Check if popup is already open
+                    if (sentientPopupId) {
+                        source = 'context'; // Use current chat if popup is open
+                    } else {
+                        source = 'context_new'; // Open new chat if popup is not open
+                    }
+                    break;
+                case "translate":
+                    textToSend = message.text.trim(); // Keep the text with translation instruction
+                    // Check if popup is already open
+                    if (sentientPopupId) {
+                        source = 'context'; // Use current chat if popup is open
+                    } else {
+                        source = 'context_new'; // Open new chat if popup is not open
+                    }
+                    break;
+                default:
+                    console.warn("Unknown selection action type:", message.type);
+                    sendResponse({ status: "Error: Unknown action type" });
+                    return false;
+            }
+            
+            copyToClipboardAndThen(textToSend, senderTabId2, () => {
+                console.log(`Selection action (${message.type}): Requesting popup open/focus AND paste.`);
+                if (message.type === "translate") {
+                    console.log(`Translation requested. Popup status: ${sentientPopupId ? 'open' : 'closed'}`);
+                    if (sentientPopupId) {
+                        console.log("Popup is already open, using existing chat for translation.");
+                        openSentientPopup({ requestPaste: true, source: 'context' });
+                    } else {
+                        console.log("Popup is not open, creating new chat for translation.");
+                        openSentientPopup({ requestPaste: true, source: 'context_new' });
+                    }
+                } else {
+                    openSentientPopup({ requestPaste: true, source: source });
+                }
+            });
+            sendResponse({ status: "Selection action request received, trying copy/open" });
             return true; // Asynchronous
 
         case "pasteClipboardContentOnFocus": // /st space paste
@@ -101,26 +595,106 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 });
 
 // Right-click Menu Click
-// *** MODIFIED: New case added ***
+// *** FIXED: Updated to handle new ID format ***
 chrome.contextMenus.onClicked.addListener((info, tab) => {
     if (!tab || !tab.id) { console.warn("Right-click ignored: Missing tab ID."); return; }
     console.log("Right-click menu item clicked:", info.menuItemId);
 
     let textToCopy = "";
     let source = 'context'; // Default source
+    
+    // Extract the base action from the ID
+    const menuAction = info.menuItemId.split('_')[0];
 
-    switch (info.menuItemId) {
-        case "sentientSummarizeDirect":
+    switch (menuAction) {
+        case "sum":
             if (!info.selectionText) { console.log("Selection required for Summarize."); return; }
-            textToCopy = "Summarize: " + info.selectionText.trim();
-            source = 'context'; // Use current/last chat
+            textToCopy = `"${info.selectionText.trim()}",Summarize`;
+            // Check if popup is already open
+            if (sentientPopupId) {
+                source = 'context'; // Use current chat if popup is open
+            } else {
+                source = 'context_new'; // Open new chat if popup is not open
+            }
             break;
-        case "sentientExplainDirect":
+        case "exp":
             if (!info.selectionText) { console.log("Selection required for Explain."); return; }
-            textToCopy = "Explain: " + info.selectionText.trim();
-            source = 'context'; // Use current/last chat
+            textToCopy = `"${info.selectionText.trim()}",Explain`;
+            // Check if popup is already open
+            if (sentientPopupId) {
+                source = 'context'; // Use current chat if popup is open
+            } else {
+                source = 'context_new'; // Open new chat if popup is not open
+            }
             break;
-        case "sentientNewChatWithSelection": // New case
+        case "send":
+            if (!info.selectionText) { console.log("Selection required for Send Text."); return; }
+            textToCopy = info.selectionText.trim();
+            // Check if popup is already open
+            if (sentientPopupId) {
+                source = 'context'; // Use current chat if popup is open
+            } else {
+                source = 'context_new'; // Open new chat if popup is not open
+            }
+            break;
+        case "custom":
+            if (!info.selectionText) { console.log("Selection required for Custom Command."); return; }
+            // Get custom commands from storage
+            chrome.storage.sync.get({
+                customCommands: []
+            }, function(items) {
+                // Extract index from the ID
+                const idParts = info.menuItemId.split('_');
+                const commandIndex = parseInt(idParts[1] || "0");
+                
+                if (items.customCommands && items.customCommands.length > commandIndex) {
+                    const command = items.customCommands[commandIndex];
+                    const formattedText = `"${info.selectionText.trim()}",${command}`;
+                    
+                    // Copy text to clipboard then open/focus popup
+                    copyToClipboardAndThen(formattedText, tab.id, () => {
+                        console.log(`Custom Command (${command}): Requesting popup open/focus AND paste.`);
+                        // Check if popup is already open
+                        if (sentientPopupId) {
+                            openSentientPopup({ requestPaste: true, source: 'context' });
+                        } else {
+                            openSentientPopup({ requestPaste: true, source: 'context_new' });
+                        }
+                    });
+                }
+            });
+            return; // Early return since we're handling this asynchronously
+            
+        case "translate":
+            if (!info.selectionText) { console.log("Selection required for Translation."); return; }
+            
+            // Get the selected language from storage
+            chrome.storage.sync.get({
+                selectedLanguage: ''
+            }, function(items) {
+                if (!items.selectedLanguage) {
+                    console.log("No language selected for translation.");
+                    return;
+                }
+                
+                let formattedText = "";
+                if (items.selectedLanguage === "Turkish") {
+                    // Format as "seçilen metin" followed by "Translate Turkish"
+                    formattedText = `"${info.selectionText.trim()}", Translate Turkish`;
+                } else {
+                    // For other languages, keep the original format but with quotes
+                    formattedText = `"${info.selectionText.trim()}", Translate to ${items.selectedLanguage}`;
+                }
+                
+                // Copy text to clipboard then open/focus popup
+                copyToClipboardAndThen(formattedText, tab.id, () => {
+                    console.log(`Translation (${items.selectedLanguage}): Requesting popup open/focus AND paste.`);
+                    openSentientPopup({ requestPaste: true, source: 'context' });
+                });
+            });
+            return; // Early return since we're handling this asynchronously
+            
+        case "newchat": // New case
             if (!info.selectionText) { console.log("Selection required for New Chat."); return; }
             textToCopy = info.selectionText.trim(); // No prefix
             source = 'context_new'; // Force new chat
@@ -187,17 +761,68 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
             const infoToSend = { ...pendingPasteInfo }; // Copy info since we'll clear it immediately
             pendingPasteInfo = null; // CLEAR pending request (to prevent retriggering)
 
-            // Send paste message to sentient-paste.js after SHORT DELAY
+            // Send paste message to sentient-paste.js after LONGER DELAY
+            // Increase delay to ensure content script is fully loaded
             setTimeout(() => {
                 console.log(`Paste message being sent to tab ${infoToSend.tabId} with delay.`);
-                chrome.tabs.sendMessage(infoToSend.tabId, { action: "pasteClipboardContent" }, (response) => {
+                
+                // First check if tab still exists
+                chrome.tabs.get(infoToSend.tabId, (tab) => {
                     if (chrome.runtime.lastError) {
-                        console.error(`Error sending paste message to tab ${infoToSend.tabId} (delayed):`, chrome.runtime.lastError.message);
-                    } else {
-                        console.log(`Paste message sent to tab ${infoToSend.tabId} (delayed), response:`, response);
+                        console.error(`Tab ${infoToSend.tabId} no longer exists:`, chrome.runtime.lastError.message);
+                        return;
                     }
+                    
+                    // Implement retry mechanism for sending messages
+                    const maxRetries = 3;
+                    let retryCount = 0;
+                    
+                    function sendMessageWithRetry() {
+                        chrome.tabs.sendMessage(infoToSend.tabId, { 
+                            action: "pasteClipboardContent",
+                            timestamp: Date.now() // Add timestamp to make each request unique
+                        }, (response) => {
+                            if (chrome.runtime.lastError) {
+                                console.error(`Error sending paste message to tab ${infoToSend.tabId} (attempt ${retryCount + 1}):`, chrome.runtime.lastError.message);
+                                
+                                // Retry with exponential backoff if we haven't reached max retries
+                                if (retryCount < maxRetries) {
+                                    retryCount++;
+                                    const backoffDelay = 300 * Math.pow(2, retryCount); // Exponential backoff: 300, 600, 1200 ms
+                                    console.log(`Retrying in ${backoffDelay}ms (attempt ${retryCount + 1}/${maxRetries + 1})...`);
+                                    setTimeout(sendMessageWithRetry, backoffDelay);
+                                } else {
+                                    console.error(`Failed to send message after ${maxRetries + 1} attempts.`);
+                                    // As a last resort, try injecting a content script directly
+                                    tryDirectScriptInjection();
+                                }
+                            } else {
+                                console.log(`Paste message sent to tab ${infoToSend.tabId} (delayed), response:`, response);
+                            }
+                        });
+                    }
+                    
+                    // Last resort: inject a script directly into the page
+                    function tryDirectScriptInjection() {
+                        console.log(`Attempting direct script injection as last resort for tab ${infoToSend.tabId}`);
+                        chrome.scripting.executeScript({
+                            target: { tabId: infoToSend.tabId },
+                            func: () => {
+                                // Dispatch a custom event that content script can listen for
+                                document.dispatchEvent(new CustomEvent('sentient_paste_request', { 
+                                    detail: { timestamp: Date.now() }
+                                }));
+                                console.log('Direct paste event dispatched');
+                            }
+                        }).catch(err => {
+                            console.error('Direct script injection failed:', err);
+                        });
+                    }
+                    
+                    // Start the retry process
+                    sendMessageWithRetry();
                 });
-            }, 300); // 300ms delay
+            }, 500); // Increased from 300ms to 500ms
         }
     }
 });
@@ -320,79 +945,60 @@ function openSentientPopup({ requestPaste = false, source = 'manual' }) {
     }
 
     // 2. Create New Popup Window
-    console.log("No existing popup. Creating new window.");
-    chrome.storage.local.get(['lastPopupState'], (result) => {
-        const urlToOpen = sentientBaseUrl; // If popup is closed, ALWAYS open base URL
-        console.log(`New popup: URL: ${urlToOpen}, Source: ${source}, Paste: ${requestPaste}`);
-        const stateToUse = result.lastPopupState || defaultPopupState;
+    console.log("No existing popup found. Creating new popup window.");
+    chrome.storage.local.get(['lastPopupState', 'lastSentientUrl'], (data) => {
+        // Determine URL
+        let url = sentientBaseUrl; // Default URL
+        if (data.lastSentientUrl && source !== 'context_new' && source !== 'manual') {
+            // Use last URL for context-based actions (but not for new chat or manual open)
+            url = data.lastSentientUrl;
+            console.log(`Using last Sentient URL: ${url}`);
+        }
+
+        // Determine window position/size
+        const popupState = data.lastPopupState || defaultPopupState;
+        console.log(`Using popup state:`, popupState);
+
+        // Create popup window
         chrome.windows.create({
-             url: urlToOpen, type: "popup",
-             width: stateToUse.width, height: stateToUse.height,
-             top: stateToUse.top, left: stateToUse.left
-         }, (window) => {
-            if (window) {
-                sentientPopupId = window.id; console.log(`New popup created, ID: ${sentientPopupId}`);
-                if (requestPaste) { // st_omni or context or context_new
-                    const newTabId = window.tabs?.[0]?.id;
-                    if (newTabId) { pendingPasteInfo = { windowId: window.id, tabId: newTabId }; }
-                    else { pendingPasteInfo = { windowId: window.id, tabId: null }; } // onUpdated will catch
-                    console.log(`Pending paste set for new window:`, pendingPasteInfo);
-                }
-            } else {
-                 console.error("Failed to create popup window.", chrome.runtime.lastError?.message);
-                 sentientPopupId = null; pendingPasteInfo = null;
+            url: url,
+            type: 'popup',
+            width: popupState.width,
+            height: popupState.height,
+            top: popupState.top,
+            left: popupState.left
+        }, (newWindow) => {
+            if (chrome.runtime.lastError || !newWindow) {
+                console.error("Failed to create popup window:", chrome.runtime.lastError?.message || "Unknown error");
+                return;
+            }
+            console.log(`New popup window created (${newWindow.id}).`);
+            sentientPopupId = newWindow.id;
+
+            // If paste requested, set pending paste info
+            if (requestPaste && newWindow.tabs && newWindow.tabs.length > 0) {
+                const tabId = newWindow.tabs[0].id;
+                console.log(`Setting pending paste for new window (${newWindow.id}), tab (${tabId}).`);
+                pendingPasteInfo = { windowId: newWindow.id, tabId: tabId };
             }
         });
     });
-} // openSentientPopup end
-
-// Inject Paste Script into Target Tab
-function injectPasteScript(tabId) {
-    if (!tabId) { console.error("injectPasteScript: Invalid tabId."); return; }
-    console.log(`Injecting paste script into tab ${tabId}...`);
-    try {
-        chrome.scripting.executeScript({
-            target: { tabId: tabId },
-            func: async () => { // This function runs inside the tab
-                console.log("Injected Script: Running...");
-                let textToPaste = "";
-                try { textToPaste = await navigator.clipboard.readText(); if (!textToPaste) { console.log("Injected Script: Clipboard empty."); return { success: false, reason: "Clipboard empty" }; } console.log("Injected Script: Read from clipboard."); }
-                catch (error) { console.error("Injected Script: Clipboard read error:", error); return { success: false, reason: "Clipboard read error", message: error.message }; }
-
-                const inputSelector = 'textarea[data-testid="query#input"], textarea[data-testid="chat.query#input"]';
-                console.log("Injected Script: Using selector:", inputSelector); // Log selector
-
-                let targetInput = null;
-                let retries = 10; const retryDelay = 300;
-
-                while (!targetInput && retries > 0) {
-                    targetInput = document.querySelector(inputSelector); // Using updated selector
-                    if (targetInput) break;
-                    retries--;
-                    if (retries > 0) await new Promise(resolve => setTimeout(resolve, retryDelay));
-                }
-
-                if (targetInput) {
-                    console.log("Injected Script: Target input found.");
-                    try {
-                        targetInput.focus(); targetInput.value = textToPaste;
-                        targetInput.dispatchEvent(new Event('input', { bubbles: true, cancelable: true }));
-                        targetInput.dispatchEvent(new Event('change', { bubbles: true, cancelable: true }));
-                        targetInput.dispatchEvent(new Event('blur', { bubbles: true, cancelable: true }));
-                        if (targetInput.setSelectionRange) { targetInput.setSelectionRange(targetInput.value.length, targetInput.value.length); }
-                        console.log("Injected Script: Paste and event triggering successful.");
-                        return { success: true };
-                    } catch (pasteError) { console.error("Injected Script: Error during paste/event triggering:", pasteError); return { success: false, reason: "Paste execution error", message: pasteError.message }; }
-                } else {
-                    console.error(`Injected Script: Target input ('${inputSelector}') not found after retries.`);
-                    return { success: false, reason: "Input not found" };
-                }
-            } // func end
-        }).then((results) => {
-             // console.log(`Script injection result for tab ${tabId}:`, results);
-             if (chrome.runtime.lastError) { console.error(`Error after executeScript for tab ${tabId}:`, chrome.runtime.lastError.message); }
-             else if (results?.[0]?.result?.success === false) { console.warn(`Injected script failed in tab ${tabId}. Reason: ${results[0].result.reason} ${results[0].result.message || ''}`); }
-        }).catch(err => { console.error(`Promise error for executeScript on tab ${tabId}:`, err); });
-    } catch (injectionError) { console.error(`Synchronous error calling executeScript for tab ${tabId}:`, injectionError); }
 }
-// injectPasteScript END
+
+// Inject paste script into tab
+function injectPasteScript(tabId) {
+    if (!tabId) {
+        console.error("Cannot inject paste script: Invalid Tab ID.");
+        return;
+    }
+    console.log(`Injecting paste script into tab ${tabId}.`);
+    setTimeout(() => {
+        chrome.tabs.sendMessage(tabId, { action: "pasteClipboardContent" }, (response) => {
+            if (chrome.runtime.lastError) {
+                console.error(`Error sending paste message to tab ${tabId}:`, chrome.runtime.lastError.message);
+            } else {
+                console.log(`Paste message sent to tab ${tabId}, response:`, response);
+            }
+        });
+    }, 100); // Short delay
+}
